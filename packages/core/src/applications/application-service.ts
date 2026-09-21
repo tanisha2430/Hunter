@@ -91,86 +91,100 @@ export async function prepareApplication(params: {
     return { applicationId: application.id, blockingQuestions: [], violations: ["No resume available to tailor."] };
   }
 
-  const normalizedJob = jobToNormalized(job);
-  const sourceResumeData = resume.versions[0].parsedData as unknown as ResumeParsedData;
+  // Everything past this point can throw (AI quota, network, validation) —
+  // without this, a thrown error left the application stuck at PREPARING
+  // forever with no visible reason and no way to retell it apart from one
+  // still genuinely in progress. Catch, record why, and land it on FAILED
+  // (a real, retriable state — PREPARING -> FAILED -> PREPARING is an
+  // allowed transition, so clicking "Prepare" again just tries again).
+  try {
+    const normalizedJob = jobToNormalized(job);
+    const sourceResumeData = resume.versions[0].parsedData as unknown as ResumeParsedData;
 
-  const plan: TailoredResumePlan = await generateTailoredResumePlan({
-    job: normalizedJob,
-    sourceResume: sourceResumeData,
-    sourceResumeId: resume.id,
-    userId: params.userId,
-  });
-  const { content, diff, violations } = validateTailoredResumePlan(plan, sourceResumeData);
+    const plan: TailoredResumePlan = await generateTailoredResumePlan({
+      job: normalizedJob,
+      sourceResume: sourceResumeData,
+      sourceResumeId: resume.id,
+      userId: params.userId,
+    });
+    const { content, diff, violations } = validateTailoredResumePlan(plan, sourceResumeData);
 
-  const tailoredResume = await prisma.tailoredResume.create({
-    data: {
-      applicationId: application.id,
-      baseResumeId: resume.id,
-      plan: plan as unknown as Prisma.InputJsonValue,
-      content: content as unknown as Prisma.InputJsonValue,
-      diffFromBase: diff as unknown as Prisma.InputJsonValue,
-    },
-  });
-
-  const coverLetter = await generateCoverLetter({
-    job: normalizedJob,
-    companyDescription: job.company.description ?? undefined,
-    candidateExperience: content.experience,
-    style: params.coverLetterStyle ?? "professional",
-    userId: params.userId,
-  });
-
-  const coverLetterRecord = await prisma.coverLetter.create({
-    data: {
-      applicationId: application.id,
-      content: coverLetter.content,
-      style: params.coverLetterStyle ?? "professional",
-    },
-  });
-
-  const questions = params.questions ?? [];
-  const answers =
-    questions.length > 0
-      ? await resolveApplicationAnswers({
-          questions,
-          userId: params.userId,
-          userEmail: user.email,
-          profile,
-          job: normalizedJob,
-          resume: content,
-        })
-      : [];
-
-  for (const answer of answers) {
-    await prisma.applicationAnswer.create({
+    const tailoredResume = await prisma.tailoredResume.create({
       data: {
         applicationId: application.id,
-        question: answer.question,
-        questionType: answer.questionType,
-        answer: answer.answer,
-        source: answer.source,
-        sourceDetail: (answer.sourceDetail ?? {}) as Prisma.InputJsonValue,
-        confidence: answer.confidence,
-        needsUserInput: answer.needsUserInput,
+        baseResumeId: resume.id,
+        plan: plan as unknown as Prisma.InputJsonValue,
+        content: content as unknown as Prisma.InputJsonValue,
+        diffFromBase: diff as unknown as Prisma.InputJsonValue,
       },
     });
+
+    const coverLetter = await generateCoverLetter({
+      job: normalizedJob,
+      companyDescription: job.company.description ?? undefined,
+      candidateExperience: content.experience,
+      style: params.coverLetterStyle ?? "professional",
+      userId: params.userId,
+    });
+
+    const coverLetterRecord = await prisma.coverLetter.create({
+      data: {
+        applicationId: application.id,
+        content: coverLetter.content,
+        style: params.coverLetterStyle ?? "professional",
+      },
+    });
+
+    const questions = params.questions ?? [];
+    const answers =
+      questions.length > 0
+        ? await resolveApplicationAnswers({
+            questions,
+            userId: params.userId,
+            userEmail: user.email,
+            profile,
+            job: normalizedJob,
+            resume: content,
+          })
+        : [];
+
+    for (const answer of answers) {
+      await prisma.applicationAnswer.create({
+        data: {
+          applicationId: application.id,
+          question: answer.question,
+          questionType: answer.questionType,
+          answer: answer.answer,
+          source: answer.source,
+          sourceDetail: (answer.sourceDetail ?? {}) as Prisma.InputJsonValue,
+          confidence: answer.confidence,
+          needsUserInput: answer.needsUserInput,
+        },
+      });
+    }
+
+    const blockingQuestions = answers.filter((a) => a.needsUserInput).map((a) => a.question);
+
+    await prisma.application.update({
+      where: { id: application.id },
+      data: {
+        resumeVersionId: resume.versions[0].id,
+        manualActionRequired: blockingQuestions.length > 0,
+      },
+    });
+
+    await transition(application.id, "READY_FOR_REVIEW", "system", {
+      tailoredResumeId: tailoredResume.id,
+      coverLetterId: coverLetterRecord.id,
+      violationCount: violations.length,
+    });
+
+    return { applicationId: application.id, blockingQuestions, violations };
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : "Unknown error while preparing this application.";
+    await transition(application.id, "FAILED", "system", { reason }).catch(() => {
+      // Don't let a failed status-write mask the original error below.
+    });
+    throw err;
   }
-
-  const blockingQuestions = answers.filter((a) => a.needsUserInput).map((a) => a.question);
-
-  await prisma.application.update({
-    where: { id: application.id },
-    data: {
-      resumeVersionId: resume.versions[0].id,
-      manualActionRequired: blockingQuestions.length > 0,
-    },
-  });
-
-  await transition(application.id, "READY_FOR_REVIEW", "system", {
-    tailoredResumeId: tailoredResume.id,
-    coverLetterId: coverLetterRecord.id,
-    violationCount: violations.length,
-  });
-
-  return { applicationId: application.id, blockingQuestions, violations };
 }

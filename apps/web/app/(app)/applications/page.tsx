@@ -4,7 +4,7 @@ import { getEffectiveThreshold } from "@hunter/core";
 import { Badge, Card, CardContent, CardHeader, CardTitle, ListGroup, ListItem, PageHeader } from "@hunter/ui";
 import { getCurrentUser } from "@/lib/supabase/server";
 import { ApplyBatchForm } from "./apply-batch-form";
-import { PrepareButton, ApproveRejectButtons, ConfirmManualSubmitButton, ApproveAllButton } from "./application-row-actions";
+import { PrepareButton, ApproveRejectButtons, ConfirmManualSubmitButton, ApproveAllButton, RetryButton } from "./application-row-actions";
 
 export default async function ApplicationsPage() {
   const user = await getCurrentUser();
@@ -47,7 +47,10 @@ export default async function ApplicationsPage() {
     }),
     prisma.application.findMany({
       where: { userId: user.id, status: { notIn: ["DISCOVERED", "MATCHED", "SHORTLISTED", "READY_FOR_REVIEW", "APPROVED"] } },
-      include: { job: { include: { company: true } } },
+      include: {
+        job: { include: { company: true } },
+        stateHistory: { orderBy: { transitionedAt: "desc" }, take: 1 },
+      },
       orderBy: { updatedAt: "desc" },
       take: 30,
     }),
@@ -157,17 +160,25 @@ export default async function ApplicationsPage() {
                 No submitted/in-progress applications yet.
               </ListItem>
             ) : (
-              tracked.map((app) => (
-                <ListItem key={app.id} interactive={false}>
-                  <div className="flex flex-col">
-                    <Link href={`/applications/${app.id}`} className="text-sm font-medium hover:underline">
-                      {app.job.title}
-                    </Link>
-                    <span className="text-xs text-muted-foreground">{app.job.company.name}</span>
-                  </div>
-                  <Badge variant="outline">{app.status}</Badge>
-                </ListItem>
-              ))
+              tracked.map((app) => {
+                const isStuck = app.status === "FAILED" || app.status === "PREPARING";
+                const reason = (app.stateHistory[0]?.metadata as { reason?: string } | null)?.reason;
+                return (
+                  <ListItem key={app.id} interactive={false}>
+                    <div className="flex flex-col gap-0.5">
+                      <Link href={`/applications/${app.id}`} className="text-sm font-medium hover:underline">
+                        {app.job.title}
+                      </Link>
+                      <span className="text-xs text-muted-foreground">{app.job.company.name}</span>
+                      {isStuck && reason ? <span className="text-xs text-destructive">{reason}</span> : null}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Badge variant={isStuck ? "destructive" : "outline"}>{app.status}</Badge>
+                      {isStuck ? <RetryButton jobId={app.jobId} /> : null}
+                    </div>
+                  </ListItem>
+                );
+              })
             )}
           </ListGroup>
         </CardContent>

@@ -22,7 +22,7 @@ export function ApplyBatchForm() {
         <form action={formAction} className="flex flex-wrap items-end gap-4">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="minScore">Minimum match score</Label>
-            <Input id="minScore" name="minScore" type="number" min={50} max={99} defaultValue={85} className="w-32" />
+            <Input id="minScore" name="minScore" type="number" min={0} max={99} defaultValue={85} className="w-32" />
           </div>
           <Button type="submit" loading={pending}>
             {pending ? "Preparing…" : "Prepare applications"}

@@ -77,6 +77,11 @@ export function ApproveAllButton({ count }: { count: number }) {
   );
 }
 
+/** Re-runs `prepareApplication` for a FAILED (or stuck PREPARING) application — same call as the original "Prepare", which picks up the existing row and tries again. */
+export function RetryButton({ jobId }: { jobId: string }) {
+  return <ActionButton label="Retry" pendingLabel="Retrying…" variant="outline" onRun={() => prepareApplicationAction(jobId)} />;
+}
+
 export function ConfirmManualSubmitButton({ applicationId }: { applicationId: string }) {
   return (
     <ActionButton
