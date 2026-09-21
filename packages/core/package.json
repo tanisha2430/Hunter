@@ -1,0 +1,25 @@
+{
+  "name": "@hunter/core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@hunter/db": "workspace:*",
+    "@hunter/ai": "workspace:*",
+    "zod": "^3.24.1",
+    "pdf-parse": "^1.1.1",
+    "mammoth": "^1.9.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8",
+    "@types/pdf-parse": "^1.1.4",
+    "@types/node": "^20.17.10"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  }
+}

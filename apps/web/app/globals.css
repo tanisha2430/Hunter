@@ -1,0 +1,13 @@
+@import "tailwindcss";
+@import "../../../packages/ui/src/styles.css";
+@source "../../../packages/ui/src";
+
+@theme inline {
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--color-background);
+  color: var(--color-foreground);
+}

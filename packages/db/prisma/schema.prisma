@@ -1,0 +1,747 @@
+// Personal AI Job Hunter — Phase 1 schema
+// See docs/AI-JOB-HUNTER-ARCHITECTURE.md for design rationale.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL") // pooled (pgbouncer, port 6543) - runtime
+  directUrl = env("DIRECT_URL")   // direct (port 5432) - migrations
+}
+
+// ---------- Enums ----------
+
+enum RemoteType {
+  ONSITE
+  HYBRID
+  REMOTE
+  UNKNOWN
+}
+
+enum EmploymentType {
+  FULL_TIME
+  PART_TIME
+  CONTRACT
+  INTERNSHIP
+  TEMPORARY
+  UNKNOWN
+}
+
+enum AtsType {
+  GREENHOUSE
+  LEVER
+  ASHBY
+  SMARTRECRUITERS
+  GENERIC_CAREER_PAGE
+  MANUAL_PASTE
+  ADZUNA // real public search API, multi-company aggregator
+  INDEED // stub, NOT_CONNECTED
+  NAUKRI // stub, NOT_CONNECTED
+  CUTSHORT // stub, NOT_CONNECTED
+}
+
+// Exact state list from the product spec (section 19) — do not rename without
+// updating packages/core/src/applications/application-state-machine.ts.
+enum ApplicationStatus {
+  DISCOVERED
+  MATCHED
+  SHORTLISTED
+  PREPARING
+  READY_FOR_REVIEW
+  APPROVED
+  SUBMITTED
+  FAILED
+  RECRUITER_REPLIED
+  SCREENING
+  INTERVIEW
+  TECHNICAL
+  HR
+  OFFER
+  REJECTED
+  WITHDRAWN
+}
+
+// PORTAL = prepared/submitted through this app. EXTERNAL = never touched this
+// app's apply flow — its existence and status are known only because an
+// inbound email was matched to it (e.g. applied directly on Naukri/Indeed).
+enum ApplicationSource {
+  PORTAL
+  EXTERNAL
+}
+
+enum ApplicationEventType {
+  STATUS_CHANGE
+  NOTE
+  EMAIL_SENT
+  EMAIL_RECEIVED
+  REMINDER
+  AI_ACTION
+}
+
+enum SkillCategory {
+  LANGUAGE
+  FRAMEWORK
+  TOOL
+  PLATFORM
+  DOMAIN_KNOWLEDGE
+  SOFT_SKILL
+  CERTIFICATION
+}
+
+enum AIProviderName {
+  ANTHROPIC
+  OPENAI
+  GOOGLE
+  VOYAGE
+}
+
+enum AITaskType {
+  JOB_MATCH_SCORING
+  JOB_EXTRACTION
+  RESUME_PARSING
+  RESUME_TAILORING
+  COVER_LETTER
+  EMBEDDING
+  OUTREACH_MESSAGE
+  COMMAND_PARSE
+  COMPANY_RESEARCH
+  EMAIL_CLASSIFICATION
+  GENERAL
+}
+
+enum OutreachChannel {
+  EMAIL
+  LINKEDIN
+}
+
+enum OutreachMessageStatus {
+  DRAFT
+  QUEUED
+  SENT
+  BOUNCED
+  REPLIED
+  FAILED
+}
+
+enum ContactConfidence {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum ConnectedAccountProvider {
+  GMAIL
+  OUTLOOK
+}
+
+enum SearchStrategy {
+  AGGRESSIVE
+  BALANCED
+  SELECTIVE
+}
+
+// ---------- Users & Profile ----------
+
+model User {
+  id        String   @id @default(uuid()) // mirrors Supabase auth.users.id
+  email     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  profile           Profile?
+  resumes           Resume[]
+  userSkills        UserSkill[]
+  jobMatches        JobMatch[]
+  applications      Application[]
+  savedSearches     SavedSearch[]
+  jobAlerts         JobAlert[]
+  settings          Settings?
+  aiRuns            AIRun[]
+  aiUsage           AIUsage[]
+  outreachCampaigns OutreachCampaign[]
+  connectedAccounts ConnectedAccount[]
+  auditLogs         AuditLog[]
+
+  @@map("users")
+}
+
+model Profile {
+  id               String   @id @default(uuid())
+  userId           String   @unique
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fullName         String?
+  headline         String?
+  phone            String?
+  location         String?
+  linkedinUrl      String?
+  githubUrl        String?
+  portfolioUrl     String?
+  yearsExperience  Float?
+  currentTitle     String?
+  workAuthorization String?
+  noticePeriodDays Int?
+  targetTitles     String[]
+  targetLocations  String[]
+  desiredSalaryMin Int?
+  desiredSalaryMax Int?
+  desiredCurrency  String   @default("USD")
+  careerGoals      String? // free text, used in AI matching (career-goal dimension)
+  companiesToAvoid String[]
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@map("profiles")
+}
+
+// ---------- Resumes ----------
+
+model Resume {
+  id           String   @id @default(uuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  label        String // "Master Resume", "Backend-focused"
+  tags         String[]
+  isPrimary    Boolean  @default(false)
+  storagePath  String // Supabase Storage object path (original file)
+  fileMimeType String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  versions        ResumeVersion[]
+  tailoredResumes TailoredResume[]
+
+  @@index([userId])
+  @@map("resumes")
+}
+
+// Each parse/edit produces a new version; keeps history + lets tailoring reference exact source
+model ResumeVersion {
+  id            String    @id @default(uuid())
+  resumeId      String
+  resume        Resume    @relation(fields: [resumeId], references: [id], onDelete: Cascade)
+  versionNumber Int
+  rawText       String // extracted plain text, pre-parse (source of truth for traceability checks)
+  parsedData    Json // ResumeParsedData shape — see packages/core/src/domain/resume.ts
+  parseModel    String?
+  parsedAt      DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@unique([resumeId, versionNumber])
+  @@index([resumeId])
+  @@map("resume_versions")
+}
+
+// ---------- Skills ----------
+
+model Skill {
+  id        String        @id @default(uuid())
+  name      String        @unique // canonicalized display name
+  slug      String        @unique // e.g. "react-js" for "React.js"/"ReactJS"/"React"
+  category  SkillCategory
+  aliases   String[]
+  createdAt DateTime      @default(now())
+
+  userSkills UserSkill[]
+  jobSkills  JobSkill[]
+
+  @@index([category])
+  @@map("skills")
+}
+
+model UserSkill {
+  id                    String   @id @default(uuid())
+  userId                String
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  skillId               String
+  skill                 Skill    @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  proficiency           Int? // 1-5 self-rated or AI-inferred
+  yearsUsed             Float?
+  sourceResumeVersionId String? // traceability: which resume version this came from
+  createdAt             DateTime @default(now())
+
+  @@unique([userId, skillId])
+  @@index([userId])
+  @@map("user_skills")
+}
+
+// ---------- Companies ----------
+
+model Company {
+  id            String   @id @default(uuid())
+  name          String
+  canonicalName String // normalized: lowercase, no "Inc"/"Ltd", trimmed
+  domain        String? // company.com, used for identity + dedup
+  description   String?
+  industry      String?
+  size          String? // "1-10", "51-200" etc, free text from source
+  logoUrl       String?
+  careerPageUrl String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  sources  CompanySource[]
+  jobs     Job[]
+  contacts CompanyContact[]
+
+  @@unique([canonicalName, domain])
+  @@index([canonicalName])
+  @@map("companies")
+}
+
+// Tracks which ATS/board a company is discoverable through (a company can have >1 source)
+model CompanySource {
+  id              String    @id @default(uuid())
+  companyId       String
+  company         Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  atsType         AtsType
+  externalToken   String // e.g. greenhouse board token, lever site slug
+  boardUrl        String?
+  isActive        Boolean   @default(true)
+  lastFetchedAt   DateTime?
+  lastFetchStatus String? // "ok" | "error:<msg>" | "not_connected" | "blocked_by_robots"
+  createdAt       DateTime  @default(now())
+
+  jobSources JobSource[]
+
+  @@unique([atsType, externalToken])
+  @@index([companyId])
+  @@map("company_sources")
+}
+
+model CompanyContact {
+  id          String            @id @default(uuid())
+  companyId   String
+  company     Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  fullName    String?
+  title       String?
+  email       String?
+  linkedinUrl String?
+  role        String? // "recruiter" | "hiring_manager" | "referral" etc
+  source      String? // "manual" | "pattern_guess" | "enrichment_api"
+  confidence  ContactConfidence @default(LOW)
+  verifiedAt  DateTime?
+  notes       String?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  outreachMessages OutreachMessage[]
+
+  @@index([companyId])
+  @@map("company_contacts")
+}
+
+// ---------- Jobs (canonical) ----------
+
+model Job {
+  id                String         @id @default(uuid()) // this IS the canonicalJobId
+  companyId         String
+  company           Company        @relation(fields: [companyId], references: [id])
+  title             String
+  normalizedTitle   String // lowercased, seniority/synonym-normalized
+  description       String // full text (markdown/plain)
+  requirements      String?
+  responsibilities  String?
+  experienceMin     Int? // years
+  experienceMax     Int?
+  salaryMin         Int?
+  salaryMax         Int?
+  currency          String?
+  location          String? // display string, e.g. "Bengaluru, India"
+  locationCountry   String?
+  locationRegion    String?
+  remoteType        RemoteType     @default(UNKNOWN)
+  employmentType    EmploymentType @default(UNKNOWN)
+  seniorityLevel    String? // "junior" | "mid" | "senior" | "staff" | "lead" etc, normalized
+  postedAt          DateTime?
+  applicationUrl    String // canonical apply URL (from best source)
+  isActive          Boolean        @default(true) // false once closed/expired across all sources
+  // A placeholder Job created only to anchor an EXTERNAL Application inferred
+  // from an inbound email (see ApplicationSource) — never a real posting, so
+  // it's created with isActive: false to stay out of every listing/matching/
+  // dedup query that already filters on isActive without needing its own check.
+  isExternalStub    Boolean        @default(false)
+  firstSeenAt       DateTime       @default(now())
+  lastSeenAt        DateTime       @default(now())
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  jobSkills    JobSkill[]
+  jobSources   JobSource[]
+  jobMatches   JobMatch[]
+  applications Application[]
+
+  @@index([companyId])
+  @@index([normalizedTitle])
+  @@index([isActive])
+  @@map("jobs")
+}
+
+// descriptionEmbedding (pgvector `vector(1536)`) is added via a hand-written
+// raw-SQL migration alongside `CREATE EXTENSION vector` — Prisma's schema DSL
+// doesn't model pgvector natively (Unsupported("vector(1536)") requires the
+// column to exist before `db pull`/migrate can round-trip it cleanly, so it's
+// added in migration SQL rather than here). See packages/db/prisma/migrations.
+
+// One row per (job, source) — this is how canonical dedup coexists with multi-source discovery
+model JobSource {
+  id              String         @id @default(uuid())
+  jobId           String
+  job             Job            @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  companySourceId String?
+  companySource   CompanySource? @relation(fields: [companySourceId], references: [id])
+  atsType         AtsType
+  externalId      String // ID from the source system (Greenhouse job id, etc.)
+  sourceUrl       String // the job posting URL at this specific source
+  rawData         Json // raw payload as received, for re-parsing/debugging
+  fetchedAt       DateTime       @default(now())
+  isPrimary       Boolean        @default(false) // which source's data "wins" for canonical Job fields
+  createdAt       DateTime       @default(now())
+
+  @@unique([atsType, externalId]) // hard identity key per source
+  @@index([jobId])
+  @@index([sourceUrl])
+  @@map("job_sources")
+}
+
+model JobSkill {
+  id         String  @id @default(uuid())
+  jobId      String
+  job        Job     @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  skillId    String
+  skill      Skill   @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  isRequired Boolean @default(true) // required vs "nice to have"
+  weight     Float?  @default(1.0) // importance, e.g. from "must have" phrasing
+
+  @@unique([jobId, skillId])
+  @@index([jobId])
+  @@map("job_skills")
+}
+
+// ---------- Matching ----------
+
+model JobMatch {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobId           String
+  job             Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  resumeVersionId String? // which resume was scored against
+
+  overallScore   Float // 0-100 weighted composite
+  scoreBreakdown Json // MatchScoreBreakdown — see packages/core/src/domain/match.ts
+  matchReasoning String? // AI-generated explanation text
+  recommendation String? // "apply" | "consider" | "skip"
+  confidence     Float? // 0-1
+  hardRejected   Boolean  @default(false)
+  rejectionReasons String[]
+  modelUsed      String?
+  computedAt     DateTime @default(now())
+
+  @@unique([userId, jobId, resumeVersionId])
+  @@index([userId, overallScore])
+  @@index([jobId])
+  @@map("job_matches")
+}
+
+// ---------- Applications (state machine) ----------
+
+model Application {
+  id                     String            @id @default(uuid())
+  userId                 String
+  user                   User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobId                  String
+  job                    Job               @relation(fields: [jobId], references: [id])
+  resumeVersionId        String?
+  source                 ApplicationSource @default(PORTAL)
+  status                 ApplicationStatus @default(DISCOVERED)
+  automatable            Boolean           @default(false)
+  manualActionRequired   Boolean           @default(false)
+  appliedAt              DateTime?
+  lastStatusChangeAt     DateTime          @default(now())
+  nextActionAt           DateTime? // for reminders/follow-ups
+  externalApplicationId  String? // ID returned by ATS if apply was automated
+  notes                  String?
+  createdAt              DateTime          @default(now())
+  updatedAt              DateTime          @updatedAt
+
+  answers         ApplicationAnswer[]
+  events          ApplicationEvent[]
+  stateHistory    ApplicationStateHistory[]
+  tailoredResumes TailoredResume[]
+  coverLetters    CoverLetter[]
+
+  @@unique([userId, jobId]) // one application per user per canonical job
+  @@index([userId, status])
+  @@map("applications")
+}
+
+// Custom application-form Q&A (e.g. "Why do you want to work here?")
+model ApplicationAnswer {
+  id            String      @id @default(uuid())
+  applicationId String
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  question      String
+  questionType  String // "text" | "textarea" | "select" | "boolean" | "file" | "numeric"
+  answer        String
+  source        String // "profile_field" | "reused_answer" | "ai_generated" | "user_input_required"
+  sourceDetail  Json? // e.g. { field: "email" } or { groundedIn: ["exp-1","exp-3"] } or { answerId }
+  confidence    Float       @default(1.0)
+  needsUserInput Boolean    @default(false)
+  createdAt     DateTime    @default(now())
+
+  @@index([applicationId])
+  @@map("application_answers")
+}
+
+// Free-form event log (notes, emails, reminders, AI actions) — NOT the state-transition
+// audit trail, which lives in ApplicationStateHistory below.
+model ApplicationEvent {
+  id            String               @id @default(uuid())
+  applicationId String
+  application   Application          @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  type          ApplicationEventType
+  payload       Json?
+  createdAt     DateTime             @default(now())
+
+  @@index([applicationId, createdAt])
+  @@map("application_events")
+}
+
+// Append-only state-transition audit trail, written by every
+// application-state-machine.transition() call. Backs funnel/rate analytics
+// (§9/§10 of the architecture doc) since current `status` alone can't answer
+// "did this application ever reach INTERVIEW".
+model ApplicationStateHistory {
+  id             String             @id @default(uuid())
+  applicationId  String
+  application    Application        @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  fromStatus     ApplicationStatus?
+  toStatus       ApplicationStatus
+  trigger        String // "system" | "user" | "batch_approve" | "adapter_confirm"
+  metadata       Json?
+  transitionedAt DateTime           @default(now())
+
+  @@index([applicationId, transitionedAt])
+  @@index([toStatus])
+  @@map("application_state_history")
+}
+
+// ---------- Generated artifacts ----------
+
+model CoverLetter {
+  id            String      @id @default(uuid())
+  applicationId String
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  content       String
+  style         String // "professional" | "concise" | "warm" | "confident" | "startup" | "fintech"
+  modelUsed     String?
+  promptContext Json? // inputs used, for traceability/regeneration
+  createdAt     DateTime    @default(now())
+
+  @@index([applicationId])
+  @@map("cover_letters")
+}
+
+model TailoredResume {
+  id                  String      @id @default(uuid())
+  applicationId       String
+  application         Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  baseResumeId        String
+  baseResume          Resume      @relation(fields: [baseResumeId], references: [id])
+  plan                Json // TailoredResumePlan (AI proposal, pre-validation)
+  content              Json // validated ResumeParsedData, post-lint
+  diffFromBase        Json // ResumeDiffEntry[] — per-unit source traceability
+  renderedStoragePath String? // generated PDF/DOCX in Supabase Storage
+  modelUsed           String?
+  createdAt           DateTime    @default(now())
+
+  @@index([applicationId])
+  @@map("tailored_resumes")
+}
+
+// ---------- Outreach ----------
+
+model OutreachCampaign {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  goal      String? // "referral" | "informational" | "cold_application_interest"
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  messages OutreachMessage[]
+
+  @@index([userId])
+  @@map("outreach_campaigns")
+}
+
+model OutreachMessage {
+  id           String                @id @default(uuid())
+  campaignId   String
+  campaign     OutreachCampaign      @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  contactId    String?
+  contact      CompanyContact?       @relation(fields: [contactId], references: [id])
+  companyId    String?
+  jobId        String?
+  channel      OutreachChannel       @default(EMAIL)
+  subject      String?
+  content      String
+  status       OutreachMessageStatus @default(DRAFT)
+  scheduledFor DateTime?
+  sentAt       DateTime?
+  repliedAt    DateTime?
+  modelUsed    String?
+  promptContext Json?
+  createdAt    DateTime              @default(now())
+
+  events OutreachEvent[]
+
+  @@index([campaignId])
+  @@index([contactId])
+  @@map("outreach_messages")
+}
+
+model OutreachEvent {
+  id         String          @id @default(uuid())
+  messageId  String
+  message    OutreachMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  type       String // "sent" | "bounced" | "replied" | "failed"
+  payload    Json?
+  occurredAt DateTime        @default(now())
+
+  @@index([messageId])
+  @@map("outreach_events")
+}
+
+// OAuth-connected email accounts used to send outreach — never a raw password.
+model ConnectedAccount {
+  id                String                    @id @default(uuid())
+  userId            String
+  user              User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider          ConnectedAccountProvider
+  encryptedTokens   Json // AES-256-GCM ciphertext blob, see packages/core/src/security/crypto.ts
+  scopes            String[]
+  emailAddress      String?
+  connectedAt       DateTime                  @default(now())
+  lastUsedAt        DateTime?
+
+  @@unique([userId, provider])
+  @@index([userId])
+  @@map("connected_accounts")
+}
+
+// ---------- Search & alerts ----------
+
+model SavedSearch {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String
+  filters   Json // { titles, locations, remoteType, salaryMin, skills, atsTypes }
+  createdAt DateTime @default(now())
+
+  jobAlerts JobAlert[]
+
+  @@index([userId])
+  @@map("saved_searches")
+}
+
+model JobAlert {
+  id            String       @id @default(uuid())
+  userId        String
+  user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  savedSearchId String?
+  savedSearch   SavedSearch? @relation(fields: [savedSearchId], references: [id])
+  frequency     String       @default("daily") // "realtime" | "daily" | "weekly"
+  isActive      Boolean      @default(true)
+  lastRunAt     DateTime?
+  createdAt     DateTime     @default(now())
+
+  @@index([userId])
+  @@map("job_alerts")
+}
+
+// ---------- AI observability ----------
+
+model AIRun {
+  id           String         @id @default(uuid())
+  userId       String?
+  user         User?          @relation(fields: [userId], references: [id], onDelete: SetNull)
+  taskType     AITaskType
+  agent        String // e.g. "JobMatchingAgent"
+  provider     AIProviderName
+  model        String
+  input        Json // sanitized prompt/context (no raw secrets)
+  output       Json?
+  status       String         @default("pending") // "pending" | "success" | "error"
+  errorMessage String?
+  validationFailed Boolean    @default(false) // e.g. traceability lint rejected the output
+  linkedEntityType String? // "job" | "application" | "resume" | "cover_letter" | "command"
+  linkedEntityId   String?
+  latencyMs    Int?
+  createdAt    DateTime       @default(now())
+
+  usage AIUsage?
+
+  @@index([userId, taskType])
+  @@index([createdAt])
+  @@index([linkedEntityType, linkedEntityId])
+  @@map("ai_runs")
+}
+
+model AIUsage {
+  id                    String         @id @default(uuid())
+  aiRunId               String         @unique
+  aiRun                 AIRun          @relation(fields: [aiRunId], references: [id], onDelete: Cascade)
+  userId                String?
+  user                  User?          @relation(fields: [userId], references: [id], onDelete: SetNull)
+  provider              AIProviderName
+  model                 String
+  inputTokens           Int
+  outputTokens          Int
+  cacheReadInputTokens  Int            @default(0)
+  costUsd               Decimal        @db.Decimal(10, 6)
+  createdAt             DateTime       @default(now())
+
+  @@index([userId, createdAt])
+  @@map("ai_usage")
+}
+
+// ---------- Settings & audit ----------
+
+model Settings {
+  id                   String         @id @default(uuid())
+  userId               String         @unique
+  user                 User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  searchStrategy       SearchStrategy @default(BALANCED)
+  customThreshold      Int? // overrides the strategy preset when set
+  hardRejectionRules   Json? // HardRejectionRules — see packages/core/src/matching/hard-rejection-rules.ts
+  matchWeights         Json? // ScoreWeights override
+  aiProviderOverrides  Json? // per-task-type provider/model overrides
+  notificationPrefs    Json?
+  dailyOutreachSendCap Int            @default(10)
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+
+  @@map("settings")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action     String // "resume.upload" | "application.status_change" | "outreach.send" | ...
+  entityType String?
+  entityId   String?
+  metadata   Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([action])
+  @@map("audit_logs")
+}
