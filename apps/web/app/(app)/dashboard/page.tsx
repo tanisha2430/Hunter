@@ -4,6 +4,7 @@ import { Card, CardContent, PageHeader } from "@hunter/ui";
 import { getCurrentUser } from "@/lib/supabase/server";
 import { MetricTiles, type MetricTile } from "./metric-tiles";
 import { ScanInboxButton } from "./scan-inbox-button";
+import { RunDailyBatchButton } from "./run-daily-batch-button";
 
 export default async function DashboardPage() {
   const user = await getCurrentUser();
@@ -35,14 +36,17 @@ export default async function DashboardPage() {
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <PageHeader title="Dashboard" description="Your job search at a glance. Click a tile to see what's in it." />
-        {gmailConnected ? (
-          <ScanInboxButton />
-        ) : (
-          <p className="text-xs text-muted-foreground">
-            Connect Gmail in <a href="/settings" className="text-primary hover:underline">Settings</a> to detect
-            application replies automatically.
-          </p>
-        )}
+        <div className="flex flex-wrap items-start gap-3">
+          <RunDailyBatchButton />
+          {gmailConnected ? (
+            <ScanInboxButton />
+          ) : (
+            <p className="max-w-xs text-xs text-muted-foreground">
+              Connect Gmail in <a href="/settings" className="text-primary hover:underline">Settings</a> to detect
+              application replies automatically.
+            </p>
+          )}
+        </div>
       </div>
       <MetricTiles tiles={tiles} />
       {!stats ? (

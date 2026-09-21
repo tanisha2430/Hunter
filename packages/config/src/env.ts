@@ -46,6 +46,14 @@ const envSchema = z.object({
   // page just won't be offered until both are set.
   ADZUNA_APP_ID: z.string().min(1).optional(),
   ADZUNA_APP_KEY: z.string().min(1).optional(),
+
+  // Required to enable the unattended daily batch endpoint
+  // (apps/web/app/api/internal/daily-batch) — a cron-triggered request must
+  // present this exact value, since that route bypasses normal user-session
+  // auth (cron has no browser session to authenticate with).
+  DAILY_BATCH_SECRET: z.string().min(16).optional(),
+  DAILY_SCORE_CAP: z.coerce.number().int().positive().optional(),
+  DAILY_MIN_SCORE: z.coerce.number().int().min(0).max(100).optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

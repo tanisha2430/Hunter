@@ -19,10 +19,12 @@ export * from "./jobs/job-extraction-agent";
 export * from "./jobs/job-ingestion-service";
 export * from "./jobs/job-search-service";
 export * from "./jobs/job-relevance";
+export * from "./jobs/daily-batch-service";
 
 export * from "./companies/company-source-service";
 
 export * from "./matching/hard-rejection-rules";
+export * from "./matching/prescreen-service";
 export * from "./matching/scoring/deterministic-scores";
 export * from "./matching/scoring/technology-score";
 export * from "./matching/job-matching-agent";

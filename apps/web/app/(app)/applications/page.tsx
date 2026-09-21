@@ -4,7 +4,7 @@ import { getEffectiveThreshold } from "@hunter/core";
 import { Badge, Card, CardContent, CardHeader, CardTitle, ListGroup, ListItem, PageHeader } from "@hunter/ui";
 import { getCurrentUser } from "@/lib/supabase/server";
 import { ApplyBatchForm } from "./apply-batch-form";
-import { PrepareButton, ApproveRejectButtons, ConfirmManualSubmitButton } from "./application-row-actions";
+import { PrepareButton, ApproveRejectButtons, ConfirmManualSubmitButton, ApproveAllButton } from "./application-row-actions";
 
 export default async function ApplicationsPage() {
   const user = await getCurrentUser();
@@ -88,7 +88,10 @@ export default async function ApplicationsPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Approval queue</CardTitle>
+          <div className="flex items-center justify-between gap-2">
+            <CardTitle>Approval queue ({readyForReview.length})</CardTitle>
+            <ApproveAllButton count={readyForReview.length} />
+          </div>
         </CardHeader>
         <CardContent className="p-0">
           <ListGroup className="border-none">

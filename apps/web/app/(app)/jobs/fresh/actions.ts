@@ -1,7 +1,8 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { runJobMatch, createApplyBatch, listFreshUnscoredJobs, ingestJobs } from "@hunter/core";
+import { runJobMatch, createApplyBatch, listFreshUnscoredJobs, ingestJobs, prescreenHardRejections } from "@hunter/core";
+import { GeminiDailyQuotaExceededError } from "@hunter/ai";
 import { getJobSourceAdapter, genericCareerPageAdapter, AdapterNotConnectedError } from "@hunter/adapters";
 import { prisma } from "@hunter/db";
 import { createClient } from "@/lib/supabase/server";
@@ -39,7 +40,8 @@ export async function refreshAllSources(): Promise<{ refreshed: number; newJobs:
       let jobCount = 0;
       if (source.atsType === "GENERIC_CAREER_PAGE") {
         const jobs = await genericCareerPageAdapter.discoverJobs(source.boardUrl ?? source.externalToken);
-        await ingestJobs(jobs, userId);
+        const results = await ingestJobs(jobs, userId);
+        await prescreenHardRejections(userId, results.map((r) => r.jobId));
         jobCount = jobs.length;
       } else {
         const adapter = getJobSourceAdapter(source.atsType);
@@ -47,7 +49,8 @@ export async function refreshAllSources(): Promise<{ refreshed: number; newJobs:
           companySourceId: source.id,
           externalToken: source.externalToken,
         });
-        await ingestJobs(jobs, userId);
+        const results = await ingestJobs(jobs, userId);
+        await prescreenHardRejections(userId, results.map((r) => r.jobId));
         jobCount = jobs.length;
       }
       await prisma.companySource.update({
@@ -78,23 +81,28 @@ const SCORE_BATCH_CAP = 10;
  * unbounded number of new jobs on every visit could burn the daily quota
  * without the user ever choosing to spend it.
  */
-export async function scoreNewFreshJobs(): Promise<{ scored: number; remaining: number }> {
+export async function scoreNewFreshJobs(): Promise<{ scored: number; remaining: number; quotaExceeded?: string }> {
   const userId = await requireUserId();
   const unscored = await listFreshUnscoredJobs(userId);
   const toScore = unscored.slice(0, SCORE_BATCH_CAP);
 
   let scored = 0;
+  let quotaExceeded: string | undefined;
   for (const job of toScore) {
     try {
       await runJobMatch({ userId, jobId: job.id });
       scored++;
     } catch (err) {
+      if (err instanceof GeminiDailyQuotaExceededError) {
+        quotaExceeded = err.message;
+        break;
+      }
       console.error(`Failed to score job ${job.id}:`, err);
     }
   }
 
   revalidatePath("/jobs/fresh");
-  return { scored, remaining: Math.max(0, unscored.length - toScore.length) };
+  return { scored, remaining: Math.max(0, unscored.length - toScore.length), quotaExceeded };
 }
 
 export interface ApplyFreshState {

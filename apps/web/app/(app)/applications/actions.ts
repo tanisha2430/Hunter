@@ -8,6 +8,7 @@ import {
   rejectApplications,
   confirmManualSubmission,
 } from "@hunter/core";
+import { prisma } from "@hunter/db";
 import { createClient } from "@/lib/supabase/server";
 
 async function requireUserId(): Promise<string> {
@@ -48,6 +49,21 @@ export async function approveApplicationAction(applicationId: string) {
   const userId = await requireUserId();
   await approveApplications(userId, [applicationId]);
   revalidatePath("/applications");
+}
+
+/** Approves every READY_FOR_REVIEW application in one action — same underlying `approveApplications` used for a single item, just given every pending id instead of one. */
+export async function approveAllReadyAction(): Promise<{ approvedCount: number }> {
+  const userId = await requireUserId();
+  const pending = await prisma.application.findMany({
+    where: { userId, status: "READY_FOR_REVIEW" },
+    select: { id: true },
+  });
+  const result = await approveApplications(
+    userId,
+    pending.map((p) => p.id),
+  );
+  revalidatePath("/applications");
+  return { approvedCount: result.approvedCount };
 }
 
 export async function rejectApplicationAction(applicationId: string) {

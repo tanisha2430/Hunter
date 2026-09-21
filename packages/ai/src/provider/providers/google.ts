@@ -10,16 +10,46 @@ const API_BASE = "https://generativelanguage.googleapis.com/v1beta";
 
 const RETRYABLE_STATUS = new Set([429, 503]);
 
+/** Thrown instead of a generic "request failed (429)" when the free tier's
+ * PER-DAY quota (not the per-minute one) is what's exhausted — retrying
+ * within the same day cannot succeed, so callers should stop immediately
+ * rather than surface this the same way as a transient rate limit. */
+export class GeminiDailyQuotaExceededError extends Error {
+  constructor(model: string) {
+    super(`Gemini's free-tier daily quota for "${model}" is exhausted — it resets at midnight Pacific time. Retrying now won't help.`);
+    this.name = "GeminiDailyQuotaExceededError";
+  }
+}
+
+async function isDailyQuotaExceeded(res: Response): Promise<boolean> {
+  if (res.status !== 429) return false;
+  try {
+    const body = (await res.clone().json()) as {
+      error?: { details?: Array<{ ["@type"]?: string; violations?: Array<{ quotaId?: string }> }> };
+    };
+    const violations = body.error?.details?.flatMap((d) => d.violations ?? []) ?? [];
+    return violations.some((v) => v.quotaId?.includes("PerDay"));
+  } catch {
+    return false;
+  }
+}
+
 /**
  * The free tier intermittently returns 503 ("high demand") and 429 (rate
  * limit) — both are genuinely transient, not a request-shape problem, so a
- * short retry with backoff resolves most of them without bothering the caller.
+ * short retry with backoff resolves most of them without bothering the
+ * caller. The one exception is a 429 whose quota violation is specifically
+ * the PER-DAY limit (as opposed to the per-minute one): no amount of
+ * retrying within the day fixes that, and burning ~6 attempts x up to 10s
+ * backoff on something that can't succeed is exactly what made scoring a
+ * batch of jobs feel like it hung — see GeminiDailyQuotaExceededError.
  */
-async function fetchWithRetry(url: string, init: RequestInit, maxAttempts = 6): Promise<Response> {
+async function fetchWithRetry(url: string, init: RequestInit, model: string, maxAttempts = 6): Promise<Response> {
   let lastResponse: Response | undefined;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const res = await fetch(url, init);
     if (res.ok || !RETRYABLE_STATUS.has(res.status)) return res;
+    if (await isDailyQuotaExceeded(res)) throw new GeminiDailyQuotaExceededError(model);
     lastResponse = res;
     if (attempt < maxAttempts - 1) {
       const delayMs = Math.min(1000 * 2 ** attempt, 10_000);
@@ -122,6 +152,7 @@ export class GoogleProvider implements AIProvider {
           },
         }),
       },
+      model,
     );
 
     if (!res.ok) {
@@ -178,6 +209,7 @@ export class GoogleProvider implements AIProvider {
           })),
         }),
       },
+      model,
     );
 
     if (!res.ok) {

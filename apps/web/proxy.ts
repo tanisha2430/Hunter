@@ -8,6 +8,9 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|api/webhooks|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    // api/internal/* has no browser session to authenticate (cron, not a
+    // signed-in user) — it enforces its own shared-secret check instead;
+    // see apps/web/app/api/internal/daily-batch/route.ts.
+    "/((?!_next/static|_next/image|favicon.ico|api/webhooks|api/internal|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
 };

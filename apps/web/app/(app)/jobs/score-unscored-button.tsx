@@ -1,11 +1,11 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { Button } from "@hunter/ui";
 import { useRouter } from "next/navigation";
-import { scoreNewFreshJobs } from "./actions";
+import { Button } from "@hunter/ui";
+import { scoreUnscoredJobsAction } from "./actions";
 
-export function ScoreNewJobsButton({ unscoredCount }: { unscoredCount: number }) {
+export function ScoreUnscoredButton({ unscoredCount }: { unscoredCount: number }) {
   const [pending, startTransition] = useTransition();
   const [message, setMessage] = useState<string | null>(null);
   const router = useRouter();
@@ -19,21 +19,23 @@ export function ScoreNewJobsButton({ unscoredCount }: { unscoredCount: number })
         loading={pending}
         onClick={() =>
           startTransition(async () => {
-            const result = await scoreNewFreshJobs();
+            const result = await scoreUnscoredJobsAction();
             if (result.quotaExceeded) {
-              setMessage(`Scored ${result.scored} before hitting today's limit: ${result.quotaExceeded}`);
+              setMessage(
+                `Scored ${result.scored} before hitting today's limit: ${result.quotaExceeded}`,
+              );
             } else {
               setMessage(
-                `Scored ${result.scored} job(s)${result.remaining > 0 ? ` — ${result.remaining} more still unscored, click again` : ""}.`,
+                `Scored ${result.scored} job(s)${result.remaining > 0 ? ` — ${result.remaining} more still waiting, click again` : ""}.`,
               );
             }
             router.refresh();
           })
         }
       >
-        {pending ? "Scoring…" : `Score up to 10 new (${unscoredCount} waiting)`}
+        {pending ? "Scoring…" : `Score next 10 (${unscoredCount} waiting)`}
       </Button>
-      {message ? <p className="text-xs text-muted-foreground">{message}</p> : null}
+      {message ? <p className="max-w-sm text-right text-xs text-muted-foreground">{message}</p> : null}
     </div>
   );
 }

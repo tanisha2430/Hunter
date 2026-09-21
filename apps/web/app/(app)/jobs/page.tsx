@@ -7,6 +7,8 @@ import { PasteJobForm } from "./paste-job-form";
 import { SearchAdzunaForm } from "./search-adzuna-form";
 import { RunMatchButton } from "./job-row-actions";
 import { CompanySourceRow } from "./company-source-row";
+import { PrescreenButton } from "./prescreen-button";
+import { ScoreUnscoredButton } from "./score-unscored-button";
 
 function scoreBadgeVariant(score: number): "success" | "warning" | "default" {
   if (score >= 82) return "success";
@@ -17,10 +19,11 @@ function scoreBadgeVariant(score: number): "success" | "warning" | "default" {
 export default async function JobsPage() {
   const user = await getCurrentUser();
 
-  const [jobs, companySources, profile] = await Promise.all([
+  const [jobs, companySources, profile, totalUnscoredCount] = await Promise.all([
     user ? listJobsForUser(user.id) : Promise.resolve([]),
     prisma.companySource.findMany({ include: { company: true }, orderBy: { createdAt: "desc" }, take: 20 }),
     user ? prisma.profile.findUnique({ where: { userId: user.id } }) : Promise.resolve(null),
+    user ? prisma.job.count({ where: { isActive: true, jobMatches: { none: { userId: user.id } } } }) : Promise.resolve(0),
   ]);
 
   const keywords = deriveRelevanceKeywords([...(profile?.targetTitles ?? []), profile?.currentTitle ?? ""]);
@@ -63,7 +66,13 @@ export default async function JobsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <PageHeader title="Jobs" description="Add job sources, then score matches against your resume." />
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <PageHeader title="Jobs" description="Add job sources, then score matches against your resume." />
+        <div className="flex flex-wrap items-start gap-3">
+          <PrescreenButton />
+          <ScoreUnscoredButton unscoredCount={totalUnscoredCount} />
+        </div>
+      </div>
 
       <div className="grid gap-4 md:grid-cols-2">
         <AddSourceForm />
